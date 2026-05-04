@@ -1,4 +1,5 @@
 const TelegramBot = require('node-telegram-bot-api')
+const axios = require('axios')
 const { getAllSnippets, saveIndex, getFile, pushFile, deleteFile } = require('./github')
 
 const TOKEN = process.env.TELEGRAM_TOKEN
@@ -9,7 +10,6 @@ let bot = null
 function initBot() {
   if (!TOKEN) return null
   bot = new TelegramBot(TOKEN, { polling: false })
-  setupCommands()
   return bot
 }
 
@@ -18,25 +18,26 @@ function sendLog(text) {
   bot.sendMessage(CHAT_ID, text, { parse_mode: 'HTML' }).catch(() => {})
 }
 
-function setupCommands() {
-  // Webhook handler dipanggil dari express route
-}
-
 async function handleUpdate(update) {
-  if (!update.message) return
-  const msg = update.message
-  const chatId = msg.chat.id.toString()
-  const text = msg.text || ''
+  if (!bot) return
 
-  // Hanya owner yang bisa akses
+  const msg = update.message
+  if (!msg) return
+
+  const chatId = msg.chat.id.toString()
   if (chatId !== CHAT_ID) {
     return bot.sendMessage(chatId, '❌ Kamu tidak punya akses!')
   }
 
+  // Handle file upload
+  if (msg.document) {
+    return handleFileUpload(msg)
+  }
+
+  const text = msg.text || ''
   const args = text.trim().split(/\s+/)
   const cmd = args[0]
 
-  // /list — list semua snippet
   if (cmd === '/list') {
     const snippets = await getAllSnippets()
     if (!snippets.length) return bot.sendMessage(chatId, '📭 Belum ada snippet.')
@@ -46,7 +47,6 @@ async function handleUpdate(update) {
     return bot.sendMessage(chatId, `📦 <b>Daftar Snippets (${snippets.length})</b>\n\n${list}`, { parse_mode: 'HTML' })
   }
 
-  // /get <id> — lihat detail snippet
   if (cmd === '/get') {
     const id = args[1]
     if (!id) return bot.sendMessage(chatId, '❌ Format: /get <id>')
@@ -67,25 +67,20 @@ async function handleUpdate(update) {
     )
   }
 
-  // /del <id> — hapus snippet
   if (cmd === '/del') {
     const id = args[1]
     if (!id) return bot.sendMessage(chatId, '❌ Format: /del <id>')
     const snippets = await getAllSnippets()
     const idx = snippets.findIndex(s => s.id === id)
     if (idx === -1) return bot.sendMessage(chatId, `❌ Snippet <code>${id}</code> tidak ditemukan.`, { parse_mode: 'HTML' })
-
     const file = await getFile(`data/snippets/${id}.js`)
     if (file) await deleteFile(`data/snippets/${id}.js`, `🗑️ delete: ${id}`, file.sha)
-
     snippets.splice(idx, 1)
     await saveIndex(snippets)
-
     sendLog(`🗑️ <b>Snippet Dihapus</b>\nID: <code>${id}</code>`)
     return bot.sendMessage(chatId, `✅ Snippet <code>${id}</code> berhasil dihapus!`, { parse_mode: 'HTML' })
   }
 
-  // /add — tambah snippet (kirim file .js)
   if (cmd === '/add') {
     return bot.sendMessage(chatId,
       `📤 <b>Cara tambah snippet:</b>\n\n` +
@@ -99,12 +94,6 @@ async function handleUpdate(update) {
     )
   }
 
-  // Handle file upload untuk add snippet
-  if (update.message?.document) {
-    return handleFileUpload(update.message)
-  }
-
-  // /help
   return bot.sendMessage(chatId,
     `🤖 <b>Nimzz Snippets Bot</b>\n\n` +
     `/list — Lihat semua snippet\n` +
@@ -133,40 +122,48 @@ async function handleFileUpload(msg) {
   const id = name.replace('.js', '').toLowerCase().replace(/[^a-z0-9]/g, '-')
   const date = new Date().toISOString().split('T')[0]
 
-  // Download file dari Telegram
-  const fileLink = await bot.getFileLink(doc.file_id)
-  const { data: code } = await require('axios').get(fileLink)
+  try {
+    await bot.sendMessage(chatId, '⏳ Memproses snippet...')
 
-  // Push file ke GitHub
-  const existingFile = await getFile(`data/snippets/${id}.js`)
-  await pushFile(
-    `data/snippets/${id}.js`,
-    typeof code === 'string' ? code : JSON.stringify(code),
-    `✨ add: snippet ${id}`,
-    existingFile?.sha || null
-  )
+    // Download file dari Telegram
+    const fileInfo = await bot.getFile(doc.file_id)
+    const fileUrl = `https://api.telegram.org/file/bot${TOKEN}/${fileInfo.file_path}`
+    const { data: code } = await axios.get(fileUrl, { responseType: 'text' })
 
-  // Update index
-  const snippets = await getAllSnippets()
-  const existing = snippets.findIndex(s => s.id === id)
-  const snippet = {
-    id,
-    name,
-    category: category.trim(),
-    author: author.trim(),
-    language: 'Javascript',
-    date,
-    protected: isProtected.trim() === 'true',
-    password: isProtected.trim() === 'true' ? (password?.trim() || '') : null
+    // Push file ke GitHub
+    const existingFile = await getFile(`data/snippets/${id}.js`)
+    await pushFile(
+      `data/snippets/${id}.js`,
+      code,
+      `✨ add: snippet ${id}`,
+      existingFile?.sha || null
+    )
+
+    // Update index
+    const snippets = await getAllSnippets()
+    const existing = snippets.findIndex(s => s.id === id)
+    const snippet = {
+      id,
+      name,
+      category: category.trim(),
+      author: author.trim(),
+      language: 'Javascript',
+      date,
+      protected: isProtected.trim() === 'true',
+      password: isProtected.trim() === 'true' ? (password?.trim() || '') : null
+    }
+
+    if (existing !== -1) snippets[existing] = snippet
+    else snippets.unshift(snippet)
+
+    await saveIndex(snippets)
+
+    sendLog(`✨ <b>Snippet Ditambah</b>\nID: <code>${id}</code>\nNama: ${name}\nKategori: ${category}`)
+    return bot.sendMessage(chatId, `✅ Snippet <b>${name}</b> berhasil ditambahkan!\nID: <code>${id}</code>\n\n🌐 <a href="https://nimzz-snippets.vercel.app/detail.html?id=${id}">Lihat di web</a>`, { parse_mode: 'HTML' })
+  } catch (e) {
+    return bot.sendMessage(chatId, `❌ Gagal tambah snippet: ${e.message}`)
   }
-
-  if (existing !== -1) snippets[existing] = snippet
-  else snippets.unshift(snippet)
-
-  await saveIndex(snippets)
-
-  sendLog(`✨ <b>Snippet Ditambah</b>\nID: <code>${id}</code>\nNama: ${name}\nKategori: ${category}`)
-  return bot.sendMessage(chatId, `✅ Snippet <b>${name}</b> berhasil ditambahkan!\nID: <code>${id}</code>`, { parse_mode: 'HTML' })
 }
 
 module.exports = { initBot, handleUpdate, sendLog }
+
