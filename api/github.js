@@ -1,4 +1,4 @@
-const axios = require('axios')
+kconst axios = require('axios')
 
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN
 const GITHUB_REPO = process.env.GITHUB_REPO
@@ -6,7 +6,7 @@ const GITHUB_BRANCH = process.env.GITHUB_BRANCH || 'main'
 const BASE_URL = `https://api.github.com/repos/${GITHUB_REPO}/contents`
 
 const headers = {
-  Authorization: `token ${GITHUB_TOKEN}`,
+  Authorization: `Bearer ${GITHUB_TOKEN}`,
   Accept: 'application/vnd.github.v3+json'
 }
 
@@ -65,3 +65,4 @@ async function saveIndex(snippets) {
 }
 
 module.exports = { getFile, pushFile, deleteFile, listFiles, getAllSnippets, saveIndex }
+
