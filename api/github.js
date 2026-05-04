@@ -1,4 +1,4 @@
-kconst axios = require('axios')
+const axios = require('axios')
 
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN
 const GITHUB_REPO = process.env.GITHUB_REPO
